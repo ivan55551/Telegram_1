@@ -1,4 +1,4 @@
-name: Build WeryGram APK
+name: Build WeryGram APK1
 
 on:
   push:

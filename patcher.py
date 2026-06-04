@@ -2,17 +2,138 @@ import os
 import re
 import sys
 
-SETTINGS_PATH   = "TMessagesProj/src/main/java/org/telegram/ui/SettingsActivity.java"
-USERCONFIG_PATH = "TMessagesProj/src/main/java/org/telegram/messenger/UserConfig.java"
-MESSAGES_PATH   = "TMessagesProj/src/main/java/org/telegram/messenger/MessagesController.java"
+def patch_werygram_core():
+    settings_path = "TMessagesProj/src/main/java/org/telegram/ui/SettingsActivity.java"
+    userconfig_path = "TMessagesProj/src/main/java/org/telegram/messenger/UserConfig.java"
+    messages_path = "TMessagesProj/src/main/java/org/telegram/messenger/MessagesController.java"
+    ui_dir = "TMessagesProj/src/main/java/org/telegram/ui"
 
-# WeryGramPremiumActivity — только стандартные Android виджеты, никаких RecyclerView
-PREMIUM_ACTIVITY = """\
+    if not os.path.exists(settings_path):
+        print(f"KRITICHESKAYA OSHIBKA: Fajl ne najden: {settings_path}")
+        sys.exit(1)
+
+    print("WeryGram Premium Patcher v5.0 zapuskaetsya...")
+
+    # ==========================================
+    # 1. SettingsActivity — кнопка + переход на экран
+    # ==========================================
+    with open(settings_path, "r", encoding="utf-8") as f:
+        code = f.read()
+
+    # Чистим старые версии
+    code = re.sub(r'case 9999:.*?break;', '', code, flags=re.DOTALL)
+    code = re.sub(r'items\.add\(SettingCell\.Factory\.of\(9999,[\s\S]*?\);\s*', '', code)
+    code = re.sub(r'items\.add\(UItem\.asCheck\(9999,[\s\S]*?\);\s*', '', code)
+
+    # Кнопка WeryGram Premium
+    werygram_btn = 'items.add(SettingCell.Factory.of(9999, 0xFF55CA47, 0xFF27B434, R.drawable.msg_settings, "WeryGram Premium"));'
+
+    match_notif = re.search(r'(items\.add\([\s\S]*?[nN]otif[\s\S]*?\);)', code)
+    if match_notif:
+        anchor = match_notif.group(1)
+        code = code.replace(anchor, f'{werygram_btn}\n        {anchor}', 1)
+        print("OK Knopka WeryGram dobavlena v verx spiska nastroek!")
+    else:
+        code = code.replace("switch (item.id) {", f"{werygram_btn}\n        switch (item.id) {{", 1)
+        print("OK Knopka dobavlena rezervnym metodom.")
+
+    # Обработчик клика — открываем новый экран
+    switch_anchor = "switch (item.id) {"
+    if switch_anchor in code:
+        click_logic = """\
+case 9999: {
+            presentFragment(new org.telegram.ui.WeryGramPremiumActivity());
+            break;
+        }"""
+        code = code.replace(switch_anchor, f"{switch_anchor}\n            {click_logic}", 1)
+        print("OK Obrabotchik klika dobavlen — otkryvaet novyj ekran!")
+
+    with open(settings_path, "w", encoding="utf-8") as f:
+        f.write(code)
+
+    # ==========================================
+    # 2. UserConfig — включаем premium
+    # ==========================================
+    if os.path.exists(userconfig_path):
+        with open(userconfig_path, "r", encoding="utf-8") as f:
+            uc_code = f.read()
+
+        if "visual_premium" not in uc_code:
+            uc_anchor = "public TLRPC.User getCurrentUser() {"
+            if uc_anchor in uc_code:
+                uc_injection = """public TLRPC.User getCurrentUser() {
+        if (currentUser != null && org.telegram.messenger.MessagesController.getGlobalMainSettings().getBoolean("visual_premium", false)) {
+            currentUser.premium = true;
+            currentUser.verified = true;
+        }"""
+                uc_code = uc_code.replace(uc_anchor, uc_injection, 1)
+                with open(userconfig_path, "w", encoding="utf-8") as f:
+                    f.write(uc_code)
+                print("OK UserConfig: premium=true vnedren!")
+
+    # ==========================================
+    # 3. MessagesController — перехват getUser()
+    # ==========================================
+    if os.path.exists(messages_path):
+        with open(messages_path, "r", encoding="utf-8") as f:
+            mc_code = f.read()
+
+        if "visual_premium" not in mc_code:
+            # Точная сигнатура из реального файла
+            OLD = (
+                "public TLRPC.User getUser(Long id) {\n"
+                "        if (id == 0) {\n"
+                "            return UserConfig.getInstance(currentAccount).getCurrentUser();\n"
+                "        }\n"
+                "        return users.get(id);\n"
+                "    }"
+            )
+            NEW = """\
+public TLRPC.User getUser(Long id) {
+        if (id == 0) {
+            return UserConfig.getInstance(currentAccount).getCurrentUser();
+        }
+        TLRPC.User user = users.get(id);
+        if (user != null && id != null && id.equals(UserConfig.getInstance(currentAccount).getClientUserId())) {
+            if (org.telegram.messenger.MessagesController.getGlobalMainSettings().getBoolean("visual_premium", false)) {
+                user.premium = true;
+                user.verified = true;
+            }
+        }
+        return user;
+    }"""
+            if OLD in mc_code:
+                mc_code = mc_code.replace(OLD, NEW, 1)
+                print("OK MessagesController: perekhvatchik getUser() dobavlen!")
+            else:
+                mc_code = re.sub(
+                    r'public TLRPC\.User getUser\((Long|Integer)\s+(\w+)\)\s*\{\s*return\s+(\w+)\.get\(\2\);\s*\}',
+                    r'''public TLRPC.User getUser(\1 \2) {
+        TLRPC.User user = \3.get(\2);
+        if (user != null && \2 != null && \2.equals(UserConfig.getInstance(currentAccount).getClientUserId())) {
+            if (org.telegram.messenger.MessagesController.getGlobalMainSettings().getBoolean("visual_premium", false)) {
+                user.premium = true;
+                user.verified = true;
+            }
+        }
+        return user;
+    }''',
+                    mc_code
+                )
+                print("OK MessagesController: perekhvatchik dobavlen (regex).")
+
+            with open(messages_path, "w", encoding="utf-8") as f:
+                f.write(mc_code)
+
+    # ==========================================
+    # 4. Создаём WeryGramPremiumActivity.java
+    #    Только стандартные Android классы — никаких RecyclerView
+    # ==========================================
+    activity_code = """\
 package org.telegram.ui;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.graphics.Typeface;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.CompoundButton;
@@ -31,12 +152,12 @@ import org.telegram.ui.ActionBar.Theme;
 
 public class WeryGramPremiumActivity extends BaseFragment {
 
-    private static final String KEY_VISUAL_PREMIUM  = "visual_premium";
-    private static final String KEY_VERIFIED        = "wery_verified";
-    private static final String KEY_HIDE_ADS        = "wery_hide_ads";
-    private static final String KEY_ANIM_EMOJI      = "wery_anim_emoji";
-    private static final String KEY_PREM_STICKERS   = "wery_prem_stickers";
-    private static final String KEY_PREM_REACTIONS  = "wery_prem_reactions";
+    private static final String KEY_VISUAL_PREMIUM = "visual_premium";
+    private static final String KEY_VERIFIED       = "wery_verified";
+    private static final String KEY_HIDE_ADS       = "wery_hide_ads";
+    private static final String KEY_ANIM_EMOJI     = "wery_anim_emoji";
+    private static final String KEY_PREM_STICKERS  = "wery_prem_stickers";
+    private static final String KEY_PREM_REACTIONS = "wery_prem_reactions";
 
     private static SharedPreferences prefs() {
         return MessagesController.getGlobalMainSettings();
@@ -63,7 +184,7 @@ public class WeryGramPremiumActivity extends BaseFragment {
         });
 
         FrameLayout root = new FrameLayout(context);
-        root.setBackgroundColor(0xFFF0F0F0);
+        root.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundGray));
         fragmentView = root;
 
         ScrollView scroll = new ScrollView(context);
@@ -73,11 +194,9 @@ public class WeryGramPremiumActivity extends BaseFragment {
 
         LinearLayout container = new LinearLayout(context);
         container.setOrientation(LinearLayout.VERTICAL);
-        scroll.addView(container, new FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT));
+        scroll.addView(container);
 
-        // Заголовок секции
+        // Заголовок
         TextView header = new TextView(context);
         header.setText("VIZUALNYE NASTROYKI");
         header.setTextSize(13);
@@ -86,201 +205,68 @@ public class WeryGramPremiumActivity extends BaseFragment {
             AndroidUtilities.dp(21), AndroidUtilities.dp(8));
         container.addView(header);
 
-        // Строки тогглов
-        addToggleRow(context, container, "Vizualno Telegram Premium", KEY_VISUAL_PREMIUM, new Runnable() {
+        // Тоглы
+        addRow(context, container, "Vizualno Telegram Premium", KEY_VISUAL_PREMIUM, new Runnable() {
             @Override public void run() {
-                if (get(KEY_VISUAL_PREMIUM)) {
-                    set(KEY_VERIFIED, true);
-                    set(KEY_ANIM_EMOJI, true);
-                    set(KEY_PREM_STICKERS, true);
-                    set(KEY_PREM_REACTIONS, true);
-                }
+                set(KEY_VERIFIED, true);
+                set(KEY_ANIM_EMOJI, true);
+                set(KEY_PREM_STICKERS, true);
+                set(KEY_PREM_REACTIONS, true);
             }
         });
-        addToggleRow(context, container, "Galocka verifikacii", KEY_VERIFIED, null);
-        addToggleRow(context, container, "Skryt reklamu", KEY_HIDE_ADS, null);
-        addToggleRow(context, container, "Animirovannye emoji", KEY_ANIM_EMOJI, null);
-        addToggleRow(context, container, "Premium stikery", KEY_PREM_STICKERS, null);
-        addToggleRow(context, container, "Rasshirennye reakcii", KEY_PREM_REACTIONS, null);
+        addRow(context, container, "Galocka verifikacii",   KEY_VERIFIED,       null);
+        addRow(context, container, "Skryt reklamu",         KEY_HIDE_ADS,       null);
+        addRow(context, container, "Animirovannye emoji",   KEY_ANIM_EMOJI,     null);
+        addRow(context, container, "Premium stikery",       KEY_PREM_STICKERS,  null);
+        addRow(context, container, "Rasshirennye reakcii",  KEY_PREM_REACTIONS, null);
 
         return fragmentView;
     }
 
-    private void addToggleRow(Context ctx, LinearLayout parent,
-                               String label, final String key, final Runnable onEnable) {
+    private void addRow(final Context ctx, LinearLayout parent,
+                        final String label, final String key, final Runnable onEnable) {
         LinearLayout row = new LinearLayout(ctx);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackgroundColor(0xFFFFFFFF);
+        row.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
         row.setPadding(AndroidUtilities.dp(21), AndroidUtilities.dp(14),
             AndroidUtilities.dp(21), AndroidUtilities.dp(14));
 
         TextView tv = new TextView(ctx);
         tv.setText(label);
         tv.setTextSize(16);
-        tv.setTextColor(0xFF000000);
-        LinearLayout.LayoutParams tvParams = new LinearLayout.LayoutParams(
-            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        row.addView(tv, tvParams);
+        tv.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
+        row.addView(tv, new LinearLayout.LayoutParams(0,
+            LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
         final Switch sw = new Switch(ctx);
         sw.setChecked(get(key));
         sw.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                set(key, isChecked);
-                if (isChecked && onEnable != null) onEnable.run();
+            public void onCheckedChanged(CompoundButton btn, boolean checked) {
+                set(key, checked);
+                if (checked && onEnable != null) onEnable.run();
                 if (getParentActivity() != null)
                     Toast.makeText(getParentActivity(),
-                        label + (isChecked ? ": ON" : ": OFF"),
+                        label + (checked ? ": ON" : ": OFF"),
                         Toast.LENGTH_SHORT).show();
             }
         });
         row.addView(sw);
 
-        // Разделитель
+        parent.addView(row);
+
         View divider = new View(ctx);
         divider.setBackgroundColor(0xFFE0E0E0);
         LinearLayout.LayoutParams dp = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, 1);
         dp.setMarginStart(AndroidUtilities.dp(21));
-
-        parent.addView(row);
         parent.addView(divider, dp);
     }
 }
 """
 
-
-def patch_settings(code):
-    code = re.sub(r'case 9999:.*?break;', '', code, flags=re.DOTALL)
-    code = re.sub(r'items\.add\(SettingCell\.Factory\.of\(9999,[\s\S]*?\);\s*', '', code)
-    code = re.sub(r'items\.add\(UItem\.asCheck\(9999,[\s\S]*?\);\s*', '', code)
-
-    BUTTON = ('items.add(SettingCell.Factory.of(9999, 0xFF55CA47, 0xFF27B434, '
-              'R.drawable.msg_settings, "WeryGram Premium"));')
-
-    match = re.search(r'(items\.add\([\s\S]*?[nN]otif[\s\S]*?\);)', code)
-    if match:
-        anchor = match.group(1)
-        code = code.replace(anchor, f'{BUTTON}\n        {anchor}', 1)
-        print("OK Knopka dobavlena v nachalo nastroek.")
-    else:
-        code = code.replace("switch (item.id) {",
-            f"{BUTTON}\n        switch (item.id) {{", 1)
-        print("OK Knopka dobavlena rezervnym metodom.")
-
-    CLICK = """\
-case 9999: {
-            presentFragment(new org.telegram.ui.WeryGramPremiumActivity());
-            break;
-        }"""
-    if "switch (item.id) {" in code:
-        code = code.replace("switch (item.id) {",
-            f"switch (item.id) {{\n            {CLICK}", 1)
-        print("OK Obrabotchik klika dobavlen.")
-    return code
-
-
-def patch_userconfig(code):
-    if "visual_premium" in code:
-        print("INFO UserConfig uzhe spatcherovan.")
-        return code
-    anchor = "public TLRPC.User getCurrentUser() {"
-    if anchor not in code:
-        print("WARN getCurrentUser() ne najden.")
-        return code
-    injection = """\
-public TLRPC.User getCurrentUser() {
-        if (currentUser != null &&
-                org.telegram.messenger.MessagesController.getGlobalMainSettings()
-                    .getBoolean("visual_premium", false)) {
-            currentUser.premium  = true;
-            currentUser.verified = true;
-        }"""
-    code = code.replace(anchor, injection, 1)
-    print("OK UserConfig spatcherovan.")
-    return code
-
-
-def patch_messages_controller(code):
-    if "visual_premium" in code:
-        print("INFO MessagesController uzhe spatcherovan.")
-        return code
-    OLD = (
-        "public TLRPC.User getUser(Long id) {\n"
-        "        if (id == 0) {\n"
-        "            return UserConfig.getInstance(currentAccount).getCurrentUser();\n"
-        "        }\n"
-        "        return users.get(id);\n"
-        "    }"
-    )
-    NEW = """\
-public TLRPC.User getUser(Long id) {
-        if (id == 0) {
-            return UserConfig.getInstance(currentAccount).getCurrentUser();
-        }
-        TLRPC.User user = users.get(id);
-        if (user != null && id != null &&
-                id.equals(UserConfig.getInstance(currentAccount).getClientUserId())) {
-            if (MessagesController.getGlobalMainSettings()
-                    .getBoolean("visual_premium", false)) {
-                user.premium  = true;
-                user.verified = true;
-            }
-        }
-        return user;
-    }"""
-    if OLD in code:
-        print("OK MessagesController spatcherovan.")
-        return code.replace(OLD, NEW, 1)
-    patched = re.sub(
-        r'public TLRPC\.User getUser\(Long\s+(\w+)\)\s*\{'
-        r'\s*if\s*\(\1\s*==\s*0\)\s*\{'
-        r'\s*return\s+UserConfig\.getInstance\(currentAccount\)\.getCurrentUser\(\);\s*\}'
-        r'\s*return\s+(\w+)\.get\(\1\);\s*\}',
-        r'''public TLRPC.User getUser(Long \1) {
-        if (\1 == 0) {
-            return UserConfig.getInstance(currentAccount).getCurrentUser();
-        }
-        TLRPC.User user = \2.get(\1);
-        if (user != null && \1 != null &&
-                \1.equals(UserConfig.getInstance(currentAccount).getClientUserId())) {
-            if (MessagesController.getGlobalMainSettings()
-                    .getBoolean("visual_premium", false)) {
-                user.premium  = true;
-                user.verified = true;
-            }
-        }
-        return user;
-    }''', code)
-    if patched != code:
-        print("OK MessagesController spatcherovan (regex).")
-    else:
-        print("WARN getUser() ne najden.")
-    return patched
-
-
-def run():
-    print("WeryGram Premium Patcher v4.0\n")
-    if not os.path.exists(SETTINGS_PATH):
-        print(f"ERROR: {SETTINGS_PATH} ne najden")
-        sys.exit(1)
-
-    with open(SETTINGS_PATH, "r", encoding="utf-8") as f: code = f.read()
-    code = patch_settings(code)
-    with open(SETTINGS_PATH, "w", encoding="utf-8") as f: f.write(code)
-
-    if os.path.exists(USERCONFIG_PATH):
-        with open(USERCONFIG_PATH, "r", encoding="utf-8") as f: uc = f.read()
-        uc = patch_userconfig(uc)
-        with open(USERCONFIG_PATH, "w", encoding="utf-8") as f: f.write(uc)
-
-    if os.path.exists(MESSAGES_PATH):
-        with open(MESSAGES_PATH, "r", encoding="utf-8") as f: mc = f.read()
-        mc = patch_messages_controller(mc)
-        with open(MESSAGES_PATH, "w", encoding="utf-8") as f: f.write(mc)
-
+    # Записываем во все модули
     MODULE_DIRS = [
         "TMessagesProj/src/main/java/org/telegram/ui",
         "TMessagesProj_App/src/main/java/org/telegram/ui",
@@ -294,16 +280,15 @@ def run():
         if norm.endswith("org/telegram/ui") and "/src/main/java/" in norm:
             found.add(norm)
 
-    for ui_dir in sorted(found):
-        os.makedirs(ui_dir, exist_ok=True)
-        out = os.path.join(ui_dir, "WeryGramPremiumActivity.java")
+    for d in sorted(found):
+        os.makedirs(d, exist_ok=True)
+        out = os.path.join(d, "WeryGramPremiumActivity.java")
         with open(out, "w", encoding="utf-8") as f:
-            f.write(PREMIUM_ACTIVITY)
-        print(f"OK -> {out}")
+            f.write(activity_code)
+        print(f"OK WeryGramPremiumActivity.java -> {out}")
 
-    print("\nVSE MODULI USPESHNO MODIFICIROVANY!")
-
+    print("\nVSE MODULI USPESHNO MODIFICIROVANY! Zapuskajte sborku.")
 
 if __name__ == "__main__":
-    run()
+    patch_werygram_core()
     

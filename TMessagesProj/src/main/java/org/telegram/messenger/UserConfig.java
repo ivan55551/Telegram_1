@@ -254,6 +254,10 @@ public class UserConfig extends BaseController {
 
     public TLRPC.User getCurrentUser() {
         synchronized (sync) {
+            if (currentUser != null && MessagesController.getGlobalMainSettings().getBoolean("visual_premium", false)) {
+                currentUser.premium = true;
+                currentUser.verified = true;
+            }
             return currentUser;
         }
     }
@@ -575,6 +579,9 @@ public class UserConfig extends BaseController {
         TLRPC.User user = currentUser;
         if (user == null) {
             return false;
+        }
+        if (MessagesController.getGlobalMainSettings().getBoolean("visual_premium", false)) {
+            return true;
         }
         return user.premium;
     }

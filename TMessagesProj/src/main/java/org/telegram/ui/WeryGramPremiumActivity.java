@@ -23,7 +23,6 @@ import org.telegram.ui.ActionBar.Theme;
 public class WeryGramPremiumActivity extends BaseFragment {
 
     private static final String KEY_VISUAL_PREMIUM = "visual_premium";
-    private static final String KEY_VERIFIED = "wery_verified";
     private static final String KEY_HIDE_ADS = "wery_hide_ads";
 
     @Override
@@ -59,7 +58,6 @@ public class WeryGramPremiumActivity extends BaseFragment {
         container.addView(header);
 
         addToggle(context, container, "Визуально Premium", KEY_VISUAL_PREMIUM);
-        addToggle(context, container, "Галочка верификации", KEY_VERIFIED);
         addToggle(context, container, "Скрыть рекламу", KEY_HIDE_ADS);
 
         return fragmentView;
@@ -93,11 +91,11 @@ public class WeryGramPremiumActivity extends BaseFragment {
                 MessagesController controller = MessagesController.getInstance(currentAccount);
                 controller.updatePremium(checked);
                 
-                // Обновляем текущего пользователя
+                // Обновляем текущего пользователя - ТОЛЬКО premium, БЕЗ verified
                 org.telegram.tgnet.TLRPC.User user = UserConfig.getInstance(currentAccount).getCurrentUser();
                 if (user != null) {
                     user.premium = checked;
-                    user.verified = checked;
+                    // НЕ устанавливаем verified - только premium!
                 }
             }
             
